@@ -1,0 +1,3 @@
+name: java-analysis
+dependencies:
+  codeql/java-queries: "*"
