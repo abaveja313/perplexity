@@ -52,7 +52,7 @@ int numSpecialFeatures(Method m) {
 from Method t
 where
   t.fromSource() and
-  t.getDeclaringType().hasName("{{ class_name }}") and t.hasStringSignature("{{ method_sig }}")
+  t.getDeclaringType().hasName("{{ class_name }}") and t.hasName("{{ method_name }}")
 select count(FieldAccess f | f.getEnclosingCallable() = t and f.getField().fromSource() and not f.getField().isFinal() | f) as field_accesses,
   reliesOnFixtures(t) as relies_fixtures,
   getNonClassUnknownInvocations(t) as diff_class_unknown_invoc,
@@ -62,4 +62,5 @@ select count(FieldAccess f | f.getEnclosingCallable() = t and f.getField().fromS
   t.getMetrics().getCyclomaticComplexity() as cyclomatic_complexity,
   t.getMetrics().getEfferentCoupling() as efferent_coupling,
   t.getMetrics().getAfferentCoupling() as afferent_coupling,
-  t.getDeclaringType().getMetrics().getMaintainabilityIndex() as maintainability_index
+  t.getDeclaringType().getMetrics().getMaintainabilityIndex() as maintainability_index,
+  t.getStringSignature() as gsig

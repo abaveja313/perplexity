@@ -77,8 +77,7 @@ int numSpecialFeatures(Method m) {
 from Method m
 where
   m.fromSource() and
-  m.hasStringSignature("{{ method_sig }}") and
-  m.getDeclaringType().hasName("{{ class_name }}")
+  m.getDeclaringType().hasName("{{ class_name }}") and m.hasName("{{ method_name }}")
 select count(FieldAccess f | f.getEnclosingCallable() = m and f.getField().fromSource() and not f.getField().isFinal() | f) as field_accesses, // field accesses
   count(FieldWrite f | f.getEnclosingCallable() = m and f.getField().fromSource()) as field_writes,
   getClassOtherInvocations(m) as same_class_other_invoc,
@@ -91,4 +90,4 @@ select count(FieldAccess f | f.getEnclosingCallable() = m and f.getField().fromS
   m.getMetrics().getEfferentCoupling() as efferent_coupling,
   m.getMetrics().getAfferentCoupling() as afferent_coupling,
   m.getDeclaringType().getMetrics().getMaintainabilityIndex() as maintainability_index,
-  m.getQualifiedName() as qname
+  m.getStringSignature() as gsig

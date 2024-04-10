@@ -7,7 +7,6 @@ import logging
 from tqdm.notebook import tqdm
 import shelve
 import pprint
-import pprint
 import pickle
 import shutil
 from jinja2 import Environment, FileSystemLoader
@@ -24,6 +23,23 @@ def setup_logging(repo_url):
     logger.addHandler(handler)
     return logger
 
+def clean_repo(repo_path, keep_list):
+    # Walk through all files and directories in the repository
+    for root, dirs, files in os.walk(repo_path, topdown=False):
+        # Delete files not in keep_list
+        for name in files:
+            if name not in keep_list:
+                file_path = os.path.join(root, name)
+                os.remove(file_path)
+                print(f"Deleted file: {file_path}")
+
+        # Delete directories not in keep_list
+        for name in dirs:
+            if name not in keep_list:
+                dir_path = os.path.join(root, name)
+                shutil.rmtree(dir_path)
+                print(f"Deleted directory: {dir_path}")
+                
 def is_valid_java_repo(directory):
     if not os.path.exists(directory):
         logger.error(f"Directory '{directory}' does not exist.")
@@ -68,35 +84,6 @@ def log_queries(logger, query_dir):
             logger.error(file)
             with open(os.path.join(query_dir, file), 'r') as f:
                 logger.error(f.read())
-
-
-def extract_method_sig(input_string):
-    normalized_input = re.sub(r'\s+(?=[,>])', '', input_string)
-    normalized_input = re.sub(r'(?<=[<,])\s+', '', normalized_input)
-    regex = r"([\w]+\.)*([\w<>\?,\s]+)\((.*?)\)"
-    match = re.search(regex, normalized_input)
-    
-    if match:
-        class_method_name = match.group(2)  # Method name including class name if present
-        parameters = match.group(3).strip()  # Parameters string
-        parameter_descriptions = []
-        
-        if parameters:
-            params = re.split(r',\s*(?![^<>]*>)(?![^,]*?>)', parameters)
-            for param in params:
-                param = re.sub(r'\bfinal\b\s*', '', param)
-                param_type = re.sub(r'\s+\w+\s*$', '', param).strip()  # Remove parameter names but keep types
-                parameter_descriptions.append(param_type)
-                
-            method_signature = f"{class_method_name}({', '.join(parameter_descriptions)})"
-        else:
-            method_signature = f"{class_method_name}()"
-            
-        return method_signature
-    
-    else:
-        return None
-
 
 def extract_result(text):
     match = re.search(r'\|\s*(\d+)\s*\|', text)
