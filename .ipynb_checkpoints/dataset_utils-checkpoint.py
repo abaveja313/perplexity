@@ -23,23 +23,39 @@ def setup_logging(repo_url):
     logger.addHandler(handler)
     return logger
 
-def clean_repo(repo_path, keep_list):
-    # Walk through all files and directories in the repository
-    for root, dirs, files in os.walk(repo_path, topdown=False):
-        # Delete files not in keep_list
-        for name in files:
-            if name not in keep_list:
-                file_path = os.path.join(root, name)
-                os.remove(file_path)
-                print(f"Deleted file: {file_path}")
 
-        # Delete directories not in keep_list
+def clean_repo(logger, repo_path, keep_list):
+    total_files = 0
+    deleted_files = 0
+    
+    keep_list = [os.path.normpath(path) for path in keep_list]
+    
+    for root, dirs, files in os.walk(repo_path, topdown=False):
+        for name in files:
+            total_files += 1
+            file_relative_path = os.path.relpath(os.path.join(root, name), start=repo_path)
+            if file_relative_path not in keep_list:
+                file_path = os.path.join(root, name)
+                try:
+                    os.remove(file_path)
+                    deleted_files += 1
+                except OSError as e:
+                    logger.error(f"Error deleting file: {file_path} : {e.strerror}")
+        
         for name in dirs:
-            if name not in keep_list:
-                dir_path = os.path.join(root, name)
-                shutil.rmtree(dir_path)
-                print(f"Deleted directory: {dir_path}")
-                
+            dir_relative_path = os.path.relpath(os.path.join(root, name), start=repo_path)
+            dir_path = os.path.join(root, name)
+            if not any(item.startswith(dir_relative_path + os.sep) for item in keep_list):
+                if not os.listdir(dir_path):
+                    try:
+                        shutil.rmtree(dir_path)
+                    except OSError as e:
+                        logger.error(f"Error deleting directory: {dir_path} : {e.strerror}")
+    
+    remaining_files = total_files - deleted_files
+    return deleted_files, total_files, remaining_files
+
+
 def is_valid_java_repo(directory):
     if not os.path.exists(directory):
         logger.error(f"Directory '{directory}' does not exist.")
@@ -61,21 +77,57 @@ def is_valid_java_repo(directory):
     return False
     
 def clone_repo(repo_url, clone_dir):
-    ssh_url = repo_url.split('.com', 1)[1]
-    subprocess.run(f"git clone git@github.com:{ssh_url} {clone_dir}", shell=True, capture_output=True, check=True)
+    ssh_url = repo_url.split(".com", 1)[1]
+    subprocess.run(
+        f"git clone git@github.com:{ssh_url} {clone_dir}",
+        shell=True,
+        capture_output=True,
+        check=True,
+    )
 
 
-def create_codeql_database(repo_path, temp_dir, config_file):
-    subprocess.run([codeql_binary, "database", "create", temp_dir, 
-                    "--threads=10", "--language=java", "--build-mode=none", 
-                    "--source-root", repo_path, f"--codescanning-config={config_file}"], capture_output=True, check=True)
+def create_codeql_database(repo_path, temp_dir):
+    subprocess.run(
+        [
+            codeql_binary,
+            "database",
+            "create",
+            temp_dir,
+            "--threads", "20",
+            "--language=java",
+            "--build-mode=none",
+            "--source-root",
+            repo_path,
+            "--no-run-unnecessary-builds",
+            "--no-tracing",
+        ],
+        capture_output=True,
+        check=True,
+    )
 
 
 def run_codeql_query(query_path, temp_dir):
-    result = subprocess.run([codeql_binary, "query", "run", query_path, "--database", temp_dir, "--warnings", "hide", "--threads", "20"],
-                            capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        [
+            codeql_binary,
+            "query",
+            "run",
+            query_path,
+            "--database",
+            temp_dir,
+            "--threads", "40",
+            "--save-cache",
+            "--xterm-progress=no",
+            "--no-release-compatibility",
+            "--no-local-checking",
+            "--no-metadata-verification"
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     return result.stdout
-    
+
 
 def log_queries(logger, query_dir):
     logger.error("Query files:")
