@@ -23,38 +23,42 @@ def setup_logging(repo_url):
     logger.addHandler(handler)
     return logger
 
+def clean_repo(directory, keeplist):
+    """
+    Further adjusted version to return the remaining files and the number of files deleted.
+    """
 
-def clean_repo(logger, repo_path, keep_list):
-    total_files = 0
-    deleted_files = 0
-    
-    keep_list = [os.path.normpath(path) for path in keep_list]
-    
-    for root, dirs, files in os.walk(repo_path, topdown=False):
+    directory = os.path.abspath(directory)
+    absolute_keeplist = [os.path.join(directory, item) if not os.path.isabs(item) else item for item in keeplist]
+    relative_keeplist = [os.path.relpath(item, start=directory) if os.path.isabs(item) else item for item in keeplist]
+
+    deleted_files_count = 0
+
+    def is_in_keeplist(file_path):
+        absolute_path = os.path.abspath(file_path)
+        relative_path = os.path.relpath(file_path, start=directory)
+        return any(absolute_path == kept_item or absolute_path.startswith(os.path.join(kept_item, '')) for kept_item in absolute_keeplist) or \
+               any(relative_path == kept_item or relative_path.startswith(os.path.join(kept_item, '')) for kept_item in relative_keeplist)
+
+    for root, dirs, files in os.walk(directory, topdown=False):
         for name in files:
-            total_files += 1
-            file_relative_path = os.path.relpath(os.path.join(root, name), start=repo_path)
-            if file_relative_path not in keep_list:
-                file_path = os.path.join(root, name)
-                try:
-                    os.remove(file_path)
-                    deleted_files += 1
-                except OSError as e:
-                    logger.error(f"Error deleting file: {file_path} : {e.strerror}")
-        
-        for name in dirs:
-            dir_relative_path = os.path.relpath(os.path.join(root, name), start=repo_path)
-            dir_path = os.path.join(root, name)
-            if not any(item.startswith(dir_relative_path + os.sep) for item in keep_list):
-                if not os.listdir(dir_path):
-                    try:
-                        shutil.rmtree(dir_path)
-                    except OSError as e:
-                        logger.error(f"Error deleting directory: {dir_path} : {e.strerror}")
-    
-    remaining_files = total_files - deleted_files
-    return deleted_files, total_files, remaining_files
+            file_path = os.path.join(root, name)
+            if not is_in_keeplist(file_path):
+                os.remove(file_path)
+                deleted_files_count += 1
 
+        for name in dirs:
+            dir_path = os.path.join(root, name)
+            if not os.listdir(dir_path) and not is_in_keeplist(dir_path):
+                os.rmdir(dir_path)
+
+    # Collect remaining files after deletion
+    remaining_files = []
+    for root, dirs, files in os.walk(directory, topdown=True):
+        for name in files:
+            remaining_files.append(os.path.join(root, name))
+
+    return remaining_files, deleted_files_count
 
 def is_valid_java_repo(directory):
     if not os.path.exists(directory):

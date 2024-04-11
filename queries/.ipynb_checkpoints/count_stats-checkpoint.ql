@@ -28,17 +28,21 @@ predicate hasKnownPackage(Callable c) {
   )
 }
 
+predicate contains(Method target, MethodCall call){
+    call.getCaller() = target or call.getCaller().getEnclosingCallable() = target
+}
+
 int getClassOtherInvocations(Method targetMethod) {
   result = count(
       MethodCall mCall |
-      mCall.getCaller() = targetMethod and
+      contains(targetMethod, mCall) and
       mCall.getCallee().getDeclaringType() = targetMethod.getDeclaringType() | mCall)    
 }
 
 int getNonClassUnknownInvocations(Method targetMethod){
   result = count(
       MethodCall mCall |
-      mCall.getCaller() = targetMethod and
+      contains(targetMethod, mCall) and
       mCall.getCallee().getDeclaringType() != targetMethod.getDeclaringType() and
       not hasKnownPackage(mCall.getCallee())
   )
@@ -47,7 +51,7 @@ int getNonClassUnknownInvocations(Method targetMethod){
 int getNonClassKnownInvocations(Method targetMethod){
   result = count(
       MethodCall mCall |
-      mCall.getCaller() = targetMethod and
+      contains(targetMethod, mCall) and
       mCall.getCallee().getDeclaringType() != targetMethod.getDeclaringType() and
       hasKnownPackage(mCall.getCallee())
   )
@@ -58,12 +62,11 @@ int numSpecialFeatures(Method m) {
       e.getEnclosingCallable() = m and
       (
           e instanceof LambdaExpr or
-          e instanceof VirtualMethodCall or
+          e instanceof VirtualMethodAccess or
           e instanceof FunctionalExpr or
           e instanceof SwitchExpr or
           e instanceof StringTemplateExpr or
           e instanceof MemberRefExpr or
-          e instanceof CastExpr or
           e instanceof PropertyRefExpr or
           e instanceof UnsafeCoerceExpr or
           e instanceof RecordPatternExpr or
@@ -78,7 +81,7 @@ from Method m
 where
   m.fromSource() and
   m.getDeclaringType().hasName("{{ class_name }}") and m.hasName("{{ method_name }}")
-select count(FieldAccess f | f.getEnclosingCallable() = m and f.getField().fromSource() and not f.getField().isFinal() | f) as field_accesses, // field accesses
+select count(FieldAccess f | f.getEnclosingCallable() = m and f.getField().fromSource() | f) as field_accesses, // field accesses
   count(FieldWrite f | f.getEnclosingCallable() = m and f.getField().fromSource()) as field_writes,
   getClassOtherInvocations(m) as same_class_other_invoc,
   getNonClassKnownInvocations(m) as diff_class_known_invoc,
