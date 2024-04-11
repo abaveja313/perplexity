@@ -96,10 +96,18 @@ int numSpecialFeatures(Method m) {
   )
 }
 
-from Method t
-where
-  t.fromSource() and
-  t.getDeclaringType().hasName("{{ class_name }}") and t.hasName("{{ method_name }}")
+class TargetFile extends File {
+  TargetFile() {
+    this.isJavaSourceFile() and
+    this.getRelativePath() = "{{ relative_path }}"
+  }
+}
+
+from Method t, TargetFile targetFile
+where t.fromSource() and
+      t.getDeclaringType().hasName("{{ class_name }}") and
+      t.hasName("{{ method_name }}") and
+      t.getFile() = targetFile
 select count(FieldAccess f | f.getEnclosingCallable() = t and f.getField().fromSource() | f) as field_accesses,
   reliesOnFixtures(t) as relies_fixtures,
   getNonClassUnknownInvocations(t) as diff_class_unknown_invoc,
