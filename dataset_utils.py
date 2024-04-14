@@ -12,11 +12,12 @@ import shutil
 from jinja2 import Environment, FileSystemLoader
 import pandas as pd
 import numpy as np
+import glob
 import json
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
-codeql_binary = "/matx/u/abaveja/codeql/codeql"
+codeql_binary = "/scr/abaveja/codeql/codeql"
 
 def get_cache_creator(path):
     if not os.path.exists(path):
@@ -28,15 +29,15 @@ def get_cache_creator(path):
 def setup_logging(repo_url):
     repo = repo_url.split(".com", 1)[1].strip("/").replace("/", "_").lower()
     logger = logging.getLogger(repo)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     
-    file_handler = logging.FileHandler(f'/sailhome/abaveja/logs/{repo}.log')
+    file_handler = logging.FileHandler(f'/scr/abaveja/logs/{repo}.log')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.WARNING)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
@@ -55,7 +56,7 @@ def get_templates(query_dir="queries/"):
     return templates
 
 
-def process_file(f: Path, split: str) -> dict:
+def process_file(f: Path) -> dict:
     """
     Processes a file by extracting its columns and adding the split information.
 
@@ -67,8 +68,7 @@ def process_file(f: Path, split: str) -> dict:
         dict: A dictionary containing the processed data.
     """
     try:
-        row = extract_columns(f.absolute())
-        row["split"] = split
+        row = extract_columns(f)
         return row
     except Exception as e:
         print(f"Error processing file: {f}")
@@ -76,46 +76,36 @@ def process_file(f: Path, split: str) -> dict:
         return None
 
 
-def get_or_create_df(df_path="df.parquet.gzip"):
+def get_or_create_df(df_path="df.feather"):
     if not os.path.exists(df_path):
-        root = "/matx/u/abaveja/methods2test/dataset/"
-        splits = ["test", "eval", "train"]
-        batch_size = 2500
+        print("Creating DF...")
+        root = "/scr/abaveja/methods2test/dataset"
+        batch_size = 2000
         data = []  # Initialize data list outside the split loop
 
-        with ThreadPoolExecutor(
-            max_workers=20
-        ) as executor:  # Reduced number of workers
-            for split in splits:
-                path = Path(os.path.join(root, split))
-                files = [
-                    f for f in path.rglob("*") if f.is_file()
-                ]  # Move is_file check here
-                total_files = len(files)
-                with tqdm(
-                    total=total_files, desc=f"Processing {split}", unit="files"
-                ) as split_pbar:
-                    futures = []
-                    for i in range(0, total_files, batch_size):
-                        batch_files = files[i : i + batch_size]
-                        batch_futures = [
-                            executor.submit(process_file, f, split) for f in batch_files
-                        ]
-                        futures.extend(batch_futures)
-
-                    for future in as_completed(futures):
+        files = glob.glob(os.path.join(root, "**", "*.json"), recursive=True)  # Search for nested files
+        print(f"Found {len(files)} files to process")
+        cpus = int(os.environ['SLURM_CPUS_ON_NODE'])
+        with ProcessPoolExecutor(max_workers=cpus) as executor:  # Adjust max_workers as needed
+            total_files = len(files)
+            num_batches = (total_files + batch_size - 1) // batch_size
+            with tqdm(total=num_batches, desc=f"Processing...", unit="batches") as pbar:
+                for i in range(0, total_files, batch_size):
+                    batch_files = files[i:i + batch_size]
+                    batch_futures = [executor.submit(process_file, f) for f in batch_files]
+                    
+                    for future in as_completed(batch_futures):
                         row = future.result()
                         if row:
                             data.append(row)
-                        split_pbar.update(1)  # Update per batch completion
+                    
+                    pbar.update(1)  # Update progress bar for each completed batch
 
-        df = pd.DataFrame.from_records(data)
-        df.to_parquet(df_path, compression="gzip", index=False)
+        df = pd.DataFrame.from_records(data)  # Create DataFrame from list of rows
+        df.to_feather(df_path)  # Save DataFrame as Feather file
     else:
-        df = pd.read_parquet(df_path)
-
+        df = pd.read_feather(df_path)  # Read DataFrame from Feather file
     return df
-
 
 def extract_columns(fpath: Path) -> dict:
     """
@@ -255,11 +245,9 @@ def is_valid_java_repo(directory):
 
 def clone_repo(repo_url, clone_dir):
     ssh_url = repo_url.split(".com", 1)[1]
-    # Run this on the data transfer node to speed things up.
     subprocess.run(
-        f'ssh abaveja@scdt.stanford.edu "git clone git@github.com:{ssh_url} {clone_dir}"',
+        f'git clone git@github.com:{ssh_url} {clone_dir}',
         shell=True,
-        capture_output=True,
         check=True,
     )
 
@@ -271,39 +259,44 @@ def create_codeql_database(repo_path, temp_dir):
             "database",
             "create",
             temp_dir,
-            "--language=java",
             "--build-mode=none",
+            "--threads=20",
+            "--language=java",
             "--source-root",
             repo_path,
-            "--no-run-unnecessary-builds",
-            "--no-tracing",
         ],
-        capture_output=True,
         check=True,
     )
 
 
-def run_codeql_query(query_path, temp_dir):
-    result = subprocess.run(
+def run_codeql_analyze(db_dir, query_dir, output_dir, batch_size):
+    subprocess.run(
         [
             codeql_binary,
-            "query",
-            "run",
-            query_path,
-            "--database",
-            temp_dir,
-            "--threads",
-            "10",
-            "--xterm-progress=no",
-            "--no-release-compatibility",
-            "--no-local-checking",
-            "--no-metadata-verification",
+            "database",
+            "run-queries",
+            db_dir,
+            query_dir,
+            "--threads=20",
+            "--no-print-diagnostics-summary",
+            "--no-print-metrics-summary",
+            
         ],
-        capture_output=True,
-        text=True,
         check=True,
     )
-    return result.stdout
+    
+    subprocess.run(
+        [
+            codeql_binary,
+            "database",
+            "interpret-results",
+            query_dir,
+            "--format=csv",
+            "--print-metrics-summary",
+            "--threads=20"
+        ],
+        check=True
+    )
 
 
 def log_queries(logger, query_dir):
@@ -327,26 +320,13 @@ def get_params(cm_sig):
         return match.group(1)
 
 
-def parse_table(lines):
-    header_line_idx = None
-    for i, line in enumerate(lines):
-        if re.match(r"\+\-+\+", line):
-            header_line_idx = i - 1
-            break
-
-    if header_line_idx is None:
-        return []
-
-    col_names = [name.strip() for name in lines[header_line_idx].split("|")[1:-1]]
-    rows = []
-    for line in lines[header_line_idx + 2 :]:
-        if line.startswith("+"):
-            break
-        row = [cell.strip() for cell in line.split("|")[1:-1]]
-        if row:
-            rows.append(dict(zip(col_names, row)))
-
-    return rows
+def parse_csv_results(csv_file):
+    results = []  
+    with open(csv_file, "r") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            results.append(row)
+    return results
 
 
 def parse_json_values(json_obj):
