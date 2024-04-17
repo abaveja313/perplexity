@@ -244,10 +244,24 @@ def is_valid_java_repo(directory):
 
 
 def clone_repo(repo_url, clone_dir):
-    ssh_url = repo_url.split(".com", 1)[1]
+    # Assuming repo_url is a valid GitHub HTTPS URL and converting to SSH format
+    if "github.com/" not in repo_url:
+        raise ValueError("Invalid GitHub URL provided.")
+    
+    repo_path = repo_url.split("github.com/")[1].strip()
+    ssh_url = f"git@github.com:{repo_path}"
+    
+    # Clone the repository
     subprocess.run(
-        f'git clone git@github.com:{ssh_url} {clone_dir}',
-        shell=True,
+        ['git', 'clone', ssh_url, clone_dir],
+        check=True,
+    )
+    
+    # Checkout the latest commit before May 18th, 2021
+    subprocess.run(
+        ['git', 'checkout', '$(git rev-list -n 1 --before="2021-05-18" HEAD)'],
+        cwd=clone_dir,
+        shell=True,  # Shell is true here to handle command substitution
         check=True,
     )
 
