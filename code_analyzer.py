@@ -16,13 +16,12 @@ import lmdb
 import csv
 from dataset_utils import (
     setup_logging,
+    parse_table,
     create_codeql_database,
-    run_codeql_analyze,
+    run_codeql_query,
     clone_repo,
     log_queries,
-    extract_result,
     parse_json_values,
-    parse_csv_results,
     DBUtils,
     clean_repo,
     get_or_create_df,
@@ -110,56 +109,98 @@ def make_codeql_database(logger, repo_url, ddb):
             logger.error(f"Clone directory structure: {os.listdir(clone_dir)}")
             return None
 
-def process_batch(logger, repo_url, batch):
+
+
+def run_query(logger, repo_url, db_dir, sig, class_name, rel_path, stats_query, log_query):
     with create_tmp_cache() as query_dir:
-        render_templates(logger, query_dir, batch)
-        
-        
-            
+        method_name = extract_method_name(sig)
+        render_templates(
+            logger, query_dir, method_name=method_name, class_name=class_name, relative_path=rel_path
+        )
+        logger.debug(
+            f"Running CodeQL queries for repository: {repo_url}, method: {sig}, class: {class_name}"
+        )
 
-def process_batches(logger, repo_url, db_dir, targets, batch_size):
-    batch_methods = []
-    batch_testcases = {}
+        try:
+            stats_output = run_codeql_query(
+                os.path.join(query_dir, stats_query), db_dir
+            )
+            results = parse_table(stats_output.splitlines())
+            min_dist = float("inf")
+            min_result = None
+            for result in results:
+                parsed_result = parse_json_values(result)
+                dist = Levenshtein.distance(sig, parsed_result["gsig"])
+                if dist < min_dist:
+                    min_dist = dist
+                    min_result = parsed_result
 
-    for i, method_test in targets.groupby("focal_method.cm_signature"):
-        method_cm_sig = i
-        method_class = method_test["focal_class.identifier"].iloc[0]
-        method_name = extract_method_name(method_cm_sig)
-        batch_methods.append({
-            "name": i,
-            "template_file": "count_stats.ql",
-            "class_name": method_class,
-            "method_name": method_name,
-            "relative_path": method_test['focal_class.file'].iloc[0]
-        })
+            logger.info(f"Using result with lev-dist {min_dist}: {min_result}")
+            return min_result
 
-        for j, test_case in method_test.iterrows():
-            test_cm_sig = test_case["test_case.cm_signature"]
-            method_name = extract_method_name(test_cm_sig)
-            test_class = test_case["test_class.identifier"]
-            
-            batch_testcases.setdefault(i, [])
-            batch_testcases[i].append({
-                "template_file": "count_test_stats.ql",
-                "class_name": test_class, "method_name": method_name, 
-                "relative_path": test_case['test_class.file']
-            })
+        except Exception as e:
+            logger.error(traceback.format_exc())
+            log_queries(logger, query_dir)
+            if isinstance(e, subprocess.CalledProcessError):
+                logger.error(f"stdout: {e.stdout}")
+                logger.error(f"stderr: {e.stderr}")
+            log_functions_out = run_codeql_query(
+                os.path.join(query_dir, log_query), db_dir
+            )
+            logger.error(f"Log functions output: {log_functions_out}")
+            return None
 
-    batch = []
-    method_index = 0
-    while len(batch) < batch_size:
-        method_params = batch_methods[method_index]
-        method_id = method_params.pop('name')
-        batch.append(method_params)
-        batch += batch_testcases[method_id]
-        method_index += 1
-    
-    logger.info(f"Processing batch of size {len(batch)}")
-    
-        
-            
-            
 
+def process_method(logger, repo_url, db_dir, query_db, method_id, method_test):
+    method_cm_sig = method_test["focal_method.cm_signature"][0]
+    result = DBUtils.item_exists(query_db, method_cm_sig)
+
+    if result:
+        logger.debug(f"Using cache for method {method_cm_sig}")
+        return result
+
+    method_class = method_test["focal_class.identifier"][0]
+    if method_id == method_class:
+        logger.info(f"Skipping constructor {method_id}")
+        return "constructor"
+
+    out = run_query(
+        logger,
+        repo_url,
+        db_dir,
+        method_cm_sig,
+        method_class,
+        method_test['focal_class.file'][0],
+        "count_stats.ql",
+        "log_functions.ql",
+    )
+    DBUtils.add_item(query_db, method_cm_sig, out)
+    return out
+
+
+def process_testcase(logger, repo_url, db_dir, query_db, test_case):
+    test_cm_sig = test_case["test_case.cm_signature"]
+    query_key = test_case["focal_method.cm_signature"] + "_" + test_cm_sig
+
+    result = DBUtils.item_exists(query_db, query_key)
+    if result:
+        logger.debug(f"Using cache for test {test_cm_sig}")
+        return result
+
+    test_class = test_case["test_class.identifier"]
+
+    out = run_query(
+        logger,
+        repo_url,
+        db_dir,
+        test_cm_sig,
+        test_class,
+        test_case['test_class.file'],
+        "count_test_stats.ql",
+        "log_functions.ql",
+    )
+    DBUtils.add_item(query_db, query_key, out)
+    return out
 
 def process_repo(repo_url, ddf):
     logger = setup_logging(repo_url)
@@ -174,23 +215,41 @@ def process_repo(repo_url, ddf):
         DBUtils.update_stats(stats_env, success=False, level="repo", name=repo_url)
         return
 
-    logger.debug(f"Found {len(targets)} methods inside repository {repo_url}")
+    methods = targets.groupby("focal_method.identifier").agg(list)
 
-    for i in range(0, len(targets), BATCH_SIZE):
-        batch_targets = targets.iloc[i:i+BATCH_SIZE]
-        method_results, test_results = process_batch(logger, repo_url, codeql_db, batch_targets, BATCH_SIZE)
+    logger.debug(f"Found {len(methods)} methods inside repository {repo_url}")
 
-        for method_sig, results in method_results.items():
-            for result in results:
-                DBUtils.add_item(query_env, method_sig, result)
-            DBUtils.update_stats(stats_env, success=True, level="method", name=method_sig)
+    succeeded = False
 
-        for test_sig, results in test_results.items():
-            for result in results:
-                query_key = f"{result['focal_method.cm_signature']}_{test_sig}"
-                DBUtils.add_item(query_env, query_key, result)
-            DBUtils.update_stats(stats_env, success=True, level="testcase", name=test_sig)
+    for method_id, method_test in methods.iterrows():
+        method_cm_sig = method_test["focal_method.cm_signature"][0]
+        logger.warning(f"Processing method {method_cm_sig}")
+        method_stats = process_method(
+            logger, repo_url, codeql_db, query_env, method_id, method_test
+        )
+        if method_stats is None:
+            DBUtils.update_stats(
+                stats_env, success=False, level="method", name=method_cm_sig
+            )
+            continue
 
+        test_cases = targets[targets["focal_method.cm_signature"] == method_cm_sig]
+        for i, test_case in test_cases.iterrows():
+            test_cm_sig = test_case["test_case.cm_signature"]
+            logger.warning(f"Processing testcase {test_cm_sig}")
+            testcase_stats = process_testcase(
+                logger, repo_url, codeql_db, query_env, test_case
+            )
+            DBUtils.update_stats(
+                stats_env,
+                success=testcase_stats is not None,
+                level="testcase",
+                name=test_cm_sig,
+            )
+
+        DBUtils.update_stats(
+            stats_env, success=True, level="method", name=method_cm_sig
+        )
     DBUtils.update_stats(stats_env, success=True, level="repo", name=repo_url)
     logger.warning("Cleaning up remaining files...")
     shutil.rmtree(codeql_db)

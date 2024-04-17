@@ -268,35 +268,49 @@ def create_codeql_database(repo_path, temp_dir):
         check=True,
     )
 
+def parse_table(lines):
+    header_line_idx = None
+    for i, line in enumerate(lines):
+        if re.match(r"\+\-+\+", line):
+            header_line_idx = i - 1
+            break
 
-def run_codeql_analyze(db_dir, query_dir, output_dir, batch_size):
-    subprocess.run(
+    if header_line_idx is None:
+        return []
+
+    col_names = [name.strip() for name in lines[header_line_idx].split("|")[1:-1]]
+    rows = []
+    for line in lines[header_line_idx + 2 :]:
+        if line.startswith("+"):
+            break
+        row = [cell.strip() for cell in line.split("|")[1:-1]]
+        if row:
+            rows.append(dict(zip(col_names, row)))
+
+    return rows
+
+
+def run_codeql_query(query_path, temp_dir):
+    result = subprocess.run(
         [
             codeql_binary,
-            "database",
-            "run-queries",
-            db_dir,
-            query_dir,
-            "--threads=20",
-            "--no-print-diagnostics-summary",
-            "--no-print-metrics-summary",
-            
+            "query",
+            "run",
+            query_path,
+            "--database",
+            temp_dir,
+            "--threads",
+            "10",
+            "--xterm-progress=no",
+            "--no-release-compatibility",
+            "--no-local-checking",
+            "--no-metadata-verification",
         ],
+        capture_output=True,
+        text=True,
         check=True,
     )
-    
-    subprocess.run(
-        [
-            codeql_binary,
-            "database",
-            "interpret-results",
-            query_dir,
-            "--format=csv",
-            "--print-metrics-summary",
-            "--threads=20"
-        ],
-        check=True
-    )
+    return result.stdout
 
 
 def log_queries(logger, query_dir):
