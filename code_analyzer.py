@@ -66,17 +66,15 @@ def get_include(repos):
         include_set.add(test_class_path)
     return list(include_set)
 
-def render_templates(logger, target_path, data):
+def render_templates(logger, target_path, **kwargs):
     shutil.copyfile("queries/qlpack.yml", os.path.join(target_path, "qlpack.yml"))
-        
-    for d in data:
-        template_file = d.pop('template_file')
-        rendered_content = templates[template_file].render(**d)
-        
+
+    for template_file, template in templates.items():
+        rendered_content = template.render(**kwargs)
         with open(os.path.join(target_path, template_file), "w") as file:
             file.write(rendered_content)
 
-    logger.debug(f"Rendered to templates to {target_path}")
+    logger.debug(f"Rendered {len(templates)} templates to {target_path}")
 
 
 def make_codeql_database(logger, repo_url, ddb):
@@ -205,8 +203,8 @@ def process_testcase(logger, repo_url, db_dir, query_db, test_case):
 def process_repo(repo_url, ddf):
     logger = setup_logging(repo_url)
 
-    query_env = lmdb.open("query_cache")
-    stats_env = lmdb.open("stats")
+    query_env = lmdb.open("/matx/u/abaveja/query_cache")
+    stats_env = lmdb.open("/matx/u/abaveja/stats")
     targets = ddf[ddf["repository.url"] == repo_url]
 
     codeql_db = make_codeql_database(logger, repo_url, targets)
@@ -262,7 +260,7 @@ def main():
         return True
 
     task_args = [(repo_url, partitioned_df) for i, repo_url in enumerate(repositories)]
-    num_threads = 1
+    num_threads = 9
 
     print("Computing results in parallel...")
 

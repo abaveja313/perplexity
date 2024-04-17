@@ -306,9 +306,9 @@ def run_codeql_query(query_path, temp_dir):
             "--no-local-checking",
             "--no-metadata-verification",
         ],
-        capture_output=True,
         text=True,
         check=True,
+        capture_output=True
     )
     return result.stdout
 

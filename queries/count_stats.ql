@@ -52,7 +52,7 @@ int numLambdaAndFunctionalExpr(Method m) {
 int numSpecialMethodAccess(Method m) {
   result = count(Expr e |
     e.getEnclosingCallable() = m and
-    (e instanceof VirtualMethodAccess or e instanceof MemberRefExpr or e instanceof PropertyRefExpr)
+    (e instanceof MemberRefExpr or e instanceof PropertyRefExpr)
   )
 }
 
