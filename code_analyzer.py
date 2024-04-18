@@ -4,7 +4,13 @@ from tqdm import tqdm
 import traceback
 import json
 import pandas as pd
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+    FIRST_COMPLETED,
+)
 import logging
 import pprint
 import Levenshtein
@@ -29,7 +35,7 @@ from dataset_utils import (
     get_templates,
     get_cache_creator,
 )
-
+from datetime import datetime, timedelta
 import sys
 
 NUM_PARTITIONS = 4
@@ -55,7 +61,9 @@ print("Reading DF")
 df = get_or_create_df(df_path="/sailhome/abaveja/df.feather")
 print("Read DF")
 
-partitioned_df = get_partition(df, NUM_PARTITIONS, PARTITION_INDEX)
+# partitioned_df = get_partition(df, NUM_PARTITIONS, PARTITION_INDEX)
+partitioned_df = get_partition(df, NUM_PARTITIONS, PARTITION_INDEX).sample(frac=1)
+
 print(f"Size of Partition: {len(partitioned_df)}")
 
 repositories = partitioned_df["repository.url"].unique()
@@ -81,6 +89,7 @@ def get_include(repos):
         include_set.add(focal_class_path)
         include_set.add(test_class_path)
     return list(include_set)
+
 
 def render_templates(logger, target_path, **kwargs):
     shutil.copyfile("queries/qlpack.yml", os.path.join(target_path, "qlpack.yml"))
@@ -108,7 +117,7 @@ def make_codeql_database(logger, repo_url, ddb):
                     f"An unexpected error occurred... no files are left in the {repo_url}"
                 )
 
-            db_dir = tempfile.mkdtemp(dir='/scr/abaveja/repos')
+            db_dir = tempfile.mkdtemp(dir="/scr/abaveja/repos")
             logger.info(f"Making Database from {clone_dir} to {db_dir}")
             create_codeql_database(clone_dir, db_dir)
             return db_dir
@@ -124,12 +133,17 @@ def make_codeql_database(logger, repo_url, ddb):
             return None
 
 
-
-def run_query(logger, repo_url, db_dir, sig, class_name, rel_path, stats_query, log_query):
+def run_query(
+    logger, repo_url, db_dir, sig, class_name, rel_path, stats_query, log_query
+):
     with create_tmp_cache() as query_dir:
         method_name = extract_method_name(sig)
         render_templates(
-            logger, query_dir, method_name=method_name, class_name=class_name, relative_path=rel_path
+            logger,
+            query_dir,
+            method_name=method_name,
+            class_name=class_name,
+            relative_path=rel_path,
         )
         logger.debug(
             f"Running CodeQL queries for repository: {repo_url}, method: {sig}, class: {class_name}"
@@ -149,7 +163,9 @@ def run_query(logger, repo_url, db_dir, sig, class_name, rel_path, stats_query, 
                     min_dist = dist
                     min_result = parsed_result
 
-            logger.info(f"Using result with lev-dist {min_dist}: {min_result}, repo={repo_url}, method={sig}, class={class_name}")
+            logger.info(
+                f"Using result with lev-dist {min_dist}: {min_result}, repo={repo_url}, method={sig}, class={class_name}"
+            )
             return min_result
 
         except Exception as e:
@@ -184,7 +200,7 @@ def process_method(logger, repo_url, db_dir, query_db, method_id, method_test):
         db_dir,
         method_cm_sig,
         method_class,
-        method_test['focal_class.file'][0],
+        method_test["focal_class.file"][0],
         "count_stats.ql",
         "log_functions.ql",
     )
@@ -209,18 +225,23 @@ def process_testcase(logger, repo_url, db_dir, query_db, test_case):
         db_dir,
         test_cm_sig,
         test_class,
-        test_case['test_class.file'],
+        test_case["test_class.file"],
         "count_test_stats.ql",
         "log_functions.ql",
     )
     DBUtils.add_item(query_db, query_key, out)
     return out, False
 
+
 def process_repo(logger, repo_url, targets):
 
     query_env = lmdb.open("/scr/abaveja/query_cache_matx1")
     stats_env = lmdb.open("/matx/u/abaveja/stats_matx1")
-    try: 
+    try:
+        if DBUtils.item_exists(query_env, repo_url):
+            DBUtils.update_stats(query_env, success=True, level="repo", name=repo_url)
+            return
+
         codeql_db = make_codeql_database(logger, repo_url, targets)
 
         if codeql_db is None:
@@ -245,14 +266,19 @@ def process_repo(logger, repo_url, targets):
                         stats_env, success=False, level="method", name=method_cm_sig
                     )
                 else:
-                    DBUtils.update_stats(stats_env, success=True, level="cached_method", name=method_cm_sig)
+                    DBUtils.update_stats(
+                        stats_env,
+                        success=True,
+                        level="cached_method",
+                        name=method_cm_sig,
+                    )
                 continue
 
             test_cases = targets[targets["focal_method.cm_signature"] == method_cm_sig]
             for i, test_case in test_cases.iterrows():
                 test_cm_sig = test_case["test_case.cm_signature"]
                 logger.warning(f"Processing testcase {test_cm_sig}")
-                testcase_stats, cached  = process_testcase(
+                testcase_stats, cached = process_testcase(
                     logger, repo_url, codeql_db, query_env, test_case
                 )
 
@@ -264,19 +290,27 @@ def process_repo(logger, repo_url, targets):
                         name=test_cm_sig,
                     )
                 else:
-                    DBUtils.update_stats(stats_env, success=True, level="cached_testcase", name=test_cm_sig)
+                    DBUtils.update_stats(
+                        stats_env,
+                        success=True,
+                        level="cached_testcase",
+                        name=test_cm_sig,
+                    )
 
             DBUtils.update_stats(
                 stats_env, success=True, level="method", name=method_cm_sig
             )
         DBUtils.update_stats(stats_env, success=True, level="repo", name=repo_url)
+        DBUtils.add_item(env=query_env, key=repo_url, results=dict(completed=True))
+
     finally:
         logger.warning("Closing environments...")
         query_env.close()
         stats_env.close()
         logger.warning("Cleaning up remaining files...")
         shutil.rmtree(codeql_db)
-        
+
+
 def process_repo_task(repo_url, ddf):
     logger = setup_logging(repo_url)
     try:
@@ -286,18 +320,26 @@ def process_repo_task(repo_url, ddf):
     except Exception as e:
         logger.exception(f"Error processing repository: {repo_url}")
         return e
-    
+
+
 def main():
-    task_args = [(repo_url, partitioned_df[partitioned_df['repository.url'] == repo_url]) for repo_url in repositories]
-    num_processes = 9
-    max_futures = 10  
+    task_args = [
+        (repo_url, partitioned_df[partitioned_df["repository.url"] == repo_url])
+        for repo_url in repositories
+    ]
+    num_processes = int(os.environ.get('SLURM_CPUS_ON_NODE', 10))
+    max_futures = 10
 
     print("Computing results in parallel...")
     pbar = tqdm(total=len(task_args), desc="Processing repo results", unit="repo")
 
     futures = []
+    last_activities = {}
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
         for args in task_args:
+            repo_url = args[0]
+            last_activities[repo_url] = datetime.now()
+
             if len(futures) >= max_futures:
                 done, _ = wait(futures, return_when=FIRST_COMPLETED)
                 for future in done:
@@ -306,20 +348,47 @@ def main():
                         pbar.update(1)
                     else:
                         print(f"Error processing repository: {args[0]}")
-                        traceback.print_exception(type(exception), exception, exception.__traceback__)
+                        traceback.print_exception(
+                            type(exception), exception, exception.__traceback__
+                        )
                     futures.remove(future)
 
-            future = executor.submit(process_repo_task, *args)
+            future = executor.submit(
+                process_repo_task, *args, last_activities[repo_url]
+            )
             futures.append(future)
 
-        for future in as_completed(futures):
-            exception = future.result()
-            if exception is None:
-                pbar.update(1)
-            else:
-                print(f"Error processing repository: {future.result()}")
-                traceback.print_exception(type(exception), exception, exception.__traceback__)
+        while futures:
+            done, futures = wait(futures, timeout=60, return_when=FIRST_COMPLETED)
+            for future in done:
+                exception = future.result()
+                if exception is None:
+                    pbar.update(1)
+                else:
+                    repo_url = future.args[0]
+                    print(f"Error processing repository: {repo_url}")
+                    traceback.print_exception(
+                        type(exception), exception, exception.__traceback__
+                    )
+
+                    # Restart the task if it hasn't shown activity in the last 10 minutes
+                    if datetime.now() - last_activities[repo_url] > timedelta(
+                        minutes=10
+                    ):
+                        print(f"Restarting task for repository: {repo_url}")
+                        ddf = partitioned_df[
+                            partitioned_df["repository.url"] == repo_url
+                        ]
+                        last_activities[repo_url] = datetime.now()
+                        new_future = executor.submit(
+                            process_repo_task, repo_url, ddf, last_activities[repo_url]
+                        )
+                        futures.add(new_future)
 
     pbar.close()
+
+    pbar.close()
+
+
 if __name__ == "__main__":
     main()

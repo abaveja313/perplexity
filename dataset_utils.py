@@ -380,23 +380,11 @@ class DBUtils:
         with env.begin(write=True) as txn:
             raw_data = txn.get(key.encode())
             if raw_data is None:
-                my_list = []
+                my_list = set()
             else:
-                my_list = pickle.loads(raw_data)
+                my_list = set(pickle.loads(raw_data))
 
-            my_list.append(item)
-            txn.put(key.encode(), pickle.dumps(my_list))
-
-    @staticmethod
-    def remove_from_list(env, key):
-        with env.begin(write=True) as txn:
-            raw_data = txn.get(key.encode())
-            if raw_data is None:
-                return
-            else:
-                my_list = pickle.loads(raw_data)
-
-            my_list.remove(item)
+            my_list.add(item)
             txn.put(key.encode(), pickle.dumps(my_list))
 
     @staticmethod
