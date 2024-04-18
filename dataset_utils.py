@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import glob
 import json
+import fcntl
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
@@ -244,26 +245,13 @@ def is_valid_java_repo(directory):
 
 
 def clone_repo(repo_url, clone_dir):
-    # Assuming repo_url is a valid GitHub HTTPS URL and converting to SSH format
-    if "github.com/" not in repo_url:
-        raise ValueError("Invalid GitHub URL provided.")
-    
-    repo_path = repo_url.split("github.com/")[1].strip()
-    ssh_url = f"git@github.com:{repo_path}"
-    
-    # Clone the repository
+    ssh_url = repo_url.split(".com", 1)[1]
     subprocess.run(
-        ['git', 'clone', ssh_url, clone_dir],
+        f'git clone git@github.com:{ssh_url} {clone_dir}',
+        shell=True,
         check=True,
     )
-    
-    # Checkout the latest commit before May 18th, 2021
-    subprocess.run(
-        ['git', 'checkout', '$(git rev-list -n 1 --before="2021-05-18" HEAD)'],
-        cwd=clone_dir,
-        shell=True,  # Shell is true here to handle command substitution
-        check=True,
-    )
+
 
 
 def create_codeql_database(repo_path, temp_dir):
@@ -418,6 +406,8 @@ class DBUtils:
         DBUtils.increment_value(db, f"{prefix}_{level}")
         if name is not None:
             DBUtils.add_to_list(db, f"{prefix}_{level}_items", name)
+        
+        DBUtils.sync_stats(db, '/matx/u/abaveja/stats.json')
 
     @staticmethod
     def add_item(env, key, results):
@@ -430,3 +420,24 @@ class DBUtils:
             raw_value = txn.get(key.encode())
             if raw_value is not None:
                 return pickle.loads(raw_value)
+   
+    @staticmethod
+    def sync_stats(env, output_file):
+        data = {
+            "completed_repo": DBUtils.item_exists(env, 'completed_repo'),
+            "completed_method": DBUtils.item_exists(env, 'completed_method'),
+            "completed_testcase": DBUtils.item_exists(env, 'completed_testcase'),
+            "failed_repo": DBUtils.item_exists(env, 'failed_repo'),
+            "failed_method": DBUtils.item_exists(env, 'failed_method'),
+            "failed_testcase": DBUtils.item_exists(env, 'failed_testcase')
+        }
+
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        with open(output_file, 'w') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+
+            try:
+                json.dump(data, f, indent=2)
+                f.write('\n')
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)

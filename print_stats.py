@@ -1,7 +1,7 @@
 import lmdb
 from dataset_utils import DBUtils
 
-stats_env = lmdb.open('/matx/u/abaveja/stats')
+stats_env = lmdb.open('/matx/u/abaveja/stats_matx1')
 
 print("Completed Repo:", DBUtils.item_exists(stats_env, 'completed_repo'))
 print("Completed Method:", DBUtils.item_exists(stats_env, 'completed_method'))

@@ -1,5 +1,13 @@
 import java
 
+boolean hasFixtureMethod(Method m) {
+  if exists(Method other, string a | other = m.getDeclaringType().getAMethod() and a = other.getAnAnnotation().toString() 
+      and (a.matches("Before%") or a.matches("After%"))) then
+    result = true
+  else 
+    result = false
+}
+
 predicate hasKnownPackage(Callable c) {
   c.getDeclaringType().getPackage().getName() in [
     // Java Builtin
@@ -68,6 +76,7 @@ where
   t.getFile() = targetFile
 select
   count(FieldAccess f | f.getEnclosingCallable() = t and f.getField().fromSource()) as field_accesses,
+  hasFixtureMethod(t) as has_fixtures,
   getNonClassUnknownInvocations(t) as diff_class_unknown_invoc,
   count(ConditionalStmt cst | cst.getEnclosingCallable() = t) as branch_count,
   numSpecialFeatures(t) as special_count,
@@ -77,3 +86,4 @@ select
   t.getMetrics().getAfferentCoupling() as afferent_coupling,
   t.getDeclaringType().getMetrics().getMaintainabilityIndex() as maintainability_index,
   t.getStringSignature() as gsig
+
