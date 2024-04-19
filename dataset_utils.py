@@ -1,14 +1,12 @@
 import os
 import re
 import subprocess
-import tempfile
 import traceback
 import logging
 from tqdm import tqdm
-import shelve
-import pprint
+from datetime import datetime, timezone, timedelta
+import time
 import pickle
-import shutil
 from jinja2 import Environment, FileSystemLoader
 import pandas as pd
 import numpy as np
@@ -16,24 +14,31 @@ import glob
 import json
 import fcntl
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import git
 
 codeql_binary = "/scr/abaveja/codeql/codeql"
 
-def get_cache_creator(path):
-    if not os.path.exists(path):
-        os.makedirs(path, exist_ok=True)
+class NoProgressMadeException(Exception):
+    pass
 
-    create_tmp_cache = lambda: tempfile.TemporaryDirectory(dir=path)
-    return create_tmp_cache
+def no_progress_handler(signum, frame):
+    raise NoProgressMadeException("No progress has been made... terminating task")
 
-def setup_logging(repo_url):
+def convert_unix_to_pst(unix_timestamp):
+    unix_timestamp = int(unix_timestamp)
+    utc_time = datetime.fromtimestamp(unix_timestamp, timezone.utc)
+    pst_time = utc_time.astimezone(timezone(timedelta(hours=-7))) 
+    pst_timestamp = pst_time.strftime("%Y-%m-%d %H:%M:%S")
+    return pst_timestamp
+
+def setup_logging(repo_url, attempt):
     repo = repo_url.split(".com", 1)[1].strip("/").replace("/", "_").lower()
-    logger = logging.getLogger(repo)
+    logger = logging.getLogger(f"{repo}_{attempt}")
     logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    
-    file_handler = logging.FileHandler(f'/scr/abaveja/logs/{repo}.log')
+    formatter = logging.Formatter(f"%(asctime)s - %(levelname)s - {repo[:20]}({attempt}) - %(message)s")
+
+    file_handler = logging.FileHandler(f"/scr/abaveja/logs/{repo}.log")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
@@ -44,6 +49,7 @@ def setup_logging(repo_url):
 
     # Return the configured logger
     return logger
+
 
 def get_templates(query_dir="queries/"):
     env = Environment(loader=FileSystemLoader(query_dir))
@@ -58,16 +64,6 @@ def get_templates(query_dir="queries/"):
 
 
 def process_file(f: Path) -> dict:
-    """
-    Processes a file by extracting its columns and adding the split information.
-
-    Args:
-        f (Path): The path to the file.
-        split (str): The split identifier.
-
-    Returns:
-        dict: A dictionary containing the processed data.
-    """
     try:
         row = extract_columns(f)
         return row
@@ -84,22 +80,28 @@ def get_or_create_df(df_path="df.feather"):
         batch_size = 2000
         data = []  # Initialize data list outside the split loop
 
-        files = glob.glob(os.path.join(root, "**", "*.json"), recursive=True)  # Search for nested files
+        files = glob.glob(
+            os.path.join(root, "**", "*.json"), recursive=True
+        )  # Search for nested files
         print(f"Found {len(files)} files to process")
-        cpus = int(os.environ['SLURM_CPUS_ON_NODE'])
-        with ProcessPoolExecutor(max_workers=cpus) as executor:  # Adjust max_workers as needed
+        cpus = int(os.environ["SLURM_CPUS_ON_NODE"])
+        with ProcessPoolExecutor(
+            max_workers=cpus
+        ) as executor:  # Adjust max_workers as needed
             total_files = len(files)
             num_batches = (total_files + batch_size - 1) // batch_size
             with tqdm(total=num_batches, desc=f"Processing...", unit="batches") as pbar:
                 for i in range(0, total_files, batch_size):
-                    batch_files = files[i:i + batch_size]
-                    batch_futures = [executor.submit(process_file, f) for f in batch_files]
-                    
+                    batch_files = files[i : i + batch_size]
+                    batch_futures = [
+                        executor.submit(process_file, f) for f in batch_files
+                    ]
+
                     for future in as_completed(batch_futures):
                         row = future.result()
                         if row:
                             data.append(row)
-                    
+
                     pbar.update(1)  # Update progress bar for each completed batch
 
         df = pd.DataFrame.from_records(data)  # Create DataFrame from list of rows
@@ -107,6 +109,7 @@ def get_or_create_df(df_path="df.feather"):
     else:
         df = pd.read_feather(df_path)  # Read DataFrame from Feather file
     return df
+
 
 def extract_columns(fpath: Path) -> dict:
     """
@@ -148,17 +151,6 @@ def extract_columns(fpath: Path) -> dict:
 def get_partition(
     ddf: pd.DataFrame, num_partitions: int, partition_index: int
 ) -> pd.DataFrame:
-    """
-    Partitions a DataFrame based on unique repository URLs.
-
-    Args:
-        ddf (pd.DataFrame): The DataFrame to partition.
-        num_partitions (int): The total number of partitions.
-        partition_index (int): The index of the current partition.
-
-    Returns:
-        pd.DataFrame: The partitioned DataFrame.
-    """
     unique_urls = ddf["repository.url"].unique()
     sorted_urls = np.sort(unique_urls)
     partition_size = len(sorted_urls) // num_partitions
@@ -173,10 +165,6 @@ def get_partition(
 
 
 def clean_repo(directory, keeplist):
-    """
-    Further adjusted version to return the remaining files and the number of files deleted.
-    """
-
     directory = os.path.abspath(directory)
     absolute_keeplist = [
         os.path.join(directory, item) if not os.path.isabs(item) else item
@@ -223,35 +211,19 @@ def clean_repo(directory, keeplist):
     return len(remaining_files), deleted_files_count
 
 
-def is_valid_java_repo(directory):
-    if not os.path.exists(directory):
-        logger.error(f"Directory '{directory}' does not exist.")
-        return False
-
-    items = os.listdir(directory)
-
-    if "gradle" in items or "gradlew" in items:
-        return True
-
-    if "pom.xml" in items:
-        return True
-
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            if file.endswith(".java"):
-                return True
-
-    return False
-
-
-def clone_repo(repo_url, clone_dir):
+def clone_repo(logger, repo_url, clone_dir):
     ssh_url = repo_url.split(".com", 1)[1]
-    subprocess.run(
-        f'git clone git@github.com:{ssh_url} {clone_dir}',
-        shell=True,
-        check=True,
-    )
-
+    repo = git.Repo.clone_from(f"git@github.com:{ssh_url}", clone_dir)
+    
+    for commit in repo.iter_commits():
+        commit_date = datetime.fromtimestamp(commit.committed_date)
+        if commit_date < datetime(2021, 5, 18):
+            # Check out the commit
+            repo.git.checkout(commit.hexsha)
+            logger.info(f"Checked out commit {commit.hexsha} from {commit_date}")
+            return
+        
+    logger.warning("No commit found before specified date")
 
 
 def create_codeql_database(repo_path, temp_dir):
@@ -268,7 +240,9 @@ def create_codeql_database(repo_path, temp_dir):
             repo_path,
         ],
         check=True,
+        capture_output=True
     )
+
 
 def parse_table(lines):
     header_line_idx = None
@@ -310,7 +284,7 @@ def run_codeql_query(query_path, temp_dir):
         ],
         text=True,
         check=True,
-        capture_output=True
+        capture_output=True,
     )
     return result.stdout
 
@@ -334,15 +308,6 @@ def get_params(cm_sig):
     match = re.search(r"(\(.*\))", cm_sig)
     if match:
         return match.group(1)
-
-
-def parse_csv_results(csv_file):
-    results = []  
-    with open(csv_file, "r") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            results.append(row)
-    return results
 
 
 def parse_json_values(json_obj):
@@ -388,14 +353,23 @@ class DBUtils:
             txn.put(key.encode(), pickle.dumps(my_list))
 
     @staticmethod
-    def update_stats(db, success=True, level="repo", name=None):
+    def register_work(repo_url, last_updated):
+        if last_updated and repo_url:
+            last_updated[repo_url] = time.time()
+
+    @staticmethod
+    def update_stats(
+        db, success=True, level="repo", name=None, last_updated=None, repo_url=None
+    ):
+        DBUtils.register_work(repo_url=repo_url, last_updated=last_updated)
+
         prefix = "completed" if success else "failed"
 
         DBUtils.increment_value(db, f"{prefix}_{level}")
         if name is not None:
             DBUtils.add_to_list(db, f"{prefix}_{level}_items", name)
-        
-        DBUtils.sync_stats(db, '/matx/u/abaveja/stats.json')
+
+        DBUtils.sync_stats(db, "/matx/u/abaveja/stats.json")
 
     @staticmethod
     def add_item(env, key, results):
@@ -408,24 +382,27 @@ class DBUtils:
             raw_value = txn.get(key.encode())
             if raw_value is not None:
                 return pickle.loads(raw_value)
-   
+
+    @staticmethod
+    def sync_data(data, output_file):
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        with open(output_file, "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
     @staticmethod
     def sync_stats(env, output_file):
         data = {
-            "completed_repo": DBUtils.item_exists(env, 'completed_repo'),
-            "completed_method": DBUtils.item_exists(env, 'completed_method'),
-            "completed_testcase": DBUtils.item_exists(env, 'completed_testcase'),
-            "failed_repo": DBUtils.item_exists(env, 'failed_repo'),
-            "failed_method": DBUtils.item_exists(env, 'failed_method'),
-            "failed_testcase": DBUtils.item_exists(env, 'failed_testcase')
+            "completed_repo": DBUtils.item_exists(env, "completed_repo"),
+            "completed_method": DBUtils.item_exists(env, "completed_method"),
+            "completed_testcase": DBUtils.item_exists(env, "completed_testcase"),
+            "failed_repo": DBUtils.item_exists(env, "failed_repo"),
+            "failed_method": DBUtils.item_exists(env, "failed_method"),
+            "failed_testcase": DBUtils.item_exists(env, "failed_testcase"),
         }
 
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        with open(output_file, 'w') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-
-            try:
-                json.dump(data, f, indent=2)
-                f.write('\n')
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+        DBUtils.sync_data(data, output_file)
