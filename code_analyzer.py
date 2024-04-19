@@ -1,7 +1,6 @@
 import os
 from tqdm import tqdm
 import traceback
-from pebble import ProcessPool
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 import Levenshtein
 import subprocess
@@ -179,7 +178,7 @@ def process_method(logger, repo_url, db_dir, query_db, method_id, method_test, a
         args,
     )
     out['t'] = 'method'
-    DBUtils.add_item(query_db, method_cm_sig, out)
+    DBUtils.add_item(query_db, method_key, out)
     return out, False
 
 
