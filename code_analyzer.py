@@ -155,6 +155,7 @@ def run_query(
 
 def process_method(logger, repo_url, db_dir, query_db, method_id, method_test, args):
     method_cm_sig = method_test["focal_method.cm_signature"][0]
+    method_key = repo_url + "\0" + method_cm_sig
     result = DBUtils.item_exists(query_db, method_cm_sig)
 
     if result:
@@ -177,13 +178,14 @@ def process_method(logger, repo_url, db_dir, query_db, method_id, method_test, a
         "log_functions.ql",
         args,
     )
+    out['t'] = 'method'
     DBUtils.add_item(query_db, method_cm_sig, out)
     return out, False
 
 
 def process_testcase(logger, repo_url, db_dir, query_db, test_case, args):
     test_cm_sig = test_case["test_case.cm_signature"]
-    query_key = test_case["focal_method.cm_signature"] + "_" + test_cm_sig
+    query_key = repo_url + "\0" + test_case["focal_method.cm_signature"] + "\0" + test_cm_sig
 
     result = DBUtils.item_exists(query_db, query_key)
     if result:
@@ -203,6 +205,7 @@ def process_testcase(logger, repo_url, db_dir, query_db, test_case, args):
         "log_functions.ql",
         args,
     )
+    out['t'] = 'testcase'
     DBUtils.add_item(query_db, query_key, out)
     return out, False
 
@@ -298,7 +301,7 @@ def process_repo(logger, repo_url, targets, last_updated, args):
         DBUtils.update_stats(
             stats_env, success=True, level="repo", name=repo_url, **update_kws
         )
-        DBUtils.add_item(env=query_env, key=repo_url, results=dict(completed=True))
+        DBUtils.add_item(env=query_env, key=repo_url, results=dict(completed=True, t='repo'))
 
     finally:
         logger.warning("Closing environments...")
@@ -418,7 +421,7 @@ def main():
     parser.add_argument(
         "--results-db",
         type=str,
-        default="/scr/abaveja/query_cache_matx1",
+        default="/scr/abaveja/query_cache",
         help="Directory for results DB",
     )
     parser.add_argument(
