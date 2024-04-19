@@ -1,6 +1,0 @@
-name: "CQLDB"
-paths:
-  # Include directories
-  {% for dir in include_dirs %}
-  - '{{ dir }}'
-  {% endfor %}
