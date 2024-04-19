@@ -325,6 +325,9 @@ def process_repo_task(repo_url, ddf, last_updated, process_pid, retry_count, arg
         process_pid[repo_url] = current_pid
         last_updated[repo_url] = time.time()
         result = process_repo(logger, repo_url, ddf, last_updated, args)
+        logger.info(f"Removing {repo_url} from managed caches")
+        last_updated.pop(repo_url)
+        process_pid.pop(repo_url)
         return True
 
     except NoProgressMadeException:
