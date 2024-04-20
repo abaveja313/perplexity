@@ -1,5 +1,12 @@
 import java
 
+class TargetFile extends File {
+  TargetFile() {
+    this.isJavaSourceFile() and
+    this.getRelativePath() = "{{ relative_path }}"
+  }
+}
+
 predicate hasKnownPackage(Callable c) {
   c.getDeclaringType().getPackage().getName() in [
     // Java Builtin
@@ -42,78 +49,109 @@ int getNonClassKnownInvocations(Method targetMethod) {
   )
 }
 
-int numLambdaAndFunctionalExpr(Method m) {
-  result = count(Expr e |
-    e.getEnclosingCallable() = m and
-    (e instanceof LambdaExpr or e instanceof FunctionalExpr)
+int numLambdaAndHigherOrderExpr(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and e instanceof FunctionalExpr)
+}
+
+int numFieldAndPropertyExpr(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and
+    (e instanceof PropertyRefExpr or
+     e instanceof RecordBindingVariableExpr or
+     e instanceof RecordPatternExpr or
+     e instanceof VirtualMethodCall)
   )
 }
 
-int numSpecialMethodAccess(Method m) {
-  result = count(Expr e |
-    e.getEnclosingCallable() = m and
-    (e instanceof MemberRefExpr or e instanceof PropertyRefExpr)
+int numControlFlowExpr(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and
+    (e instanceof ConditionalExpr or
+     e instanceof ChooseExpr)
   )
 }
 
-int numSpecialControlFlow(Method m) {
-  result = count(Expr e |
-    e.getEnclosingCallable() = m and
-    (e instanceof SwitchExpr or e instanceof UnsafeCoerceExpr)
+int numLiteralExpr(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and
+    (e instanceof CompileTimeConstantExpr or
+     e instanceof StringTemplateExpr)
   )
 }
 
-int numSpecialLiterals(Method m) {
-  result = count(Expr e |
-    e.getEnclosingCallable() = m and
-    (e instanceof StringTemplateExpr or e instanceof CharacterLiteral)
+int numExplicitTypeCasts(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and
+    (e instanceof CastExpr or
+     e instanceof WildcardTypeAccess or
+     e instanceof UnionTypeAccess or
+     e instanceof TypeAccess or
+     e instanceof IntersectionTypeAccess)
   )
 }
 
-int numSpecialIncDec(Method m) {
-  result = count(Expr e |
-    e.getEnclosingCallable() = m and
-    (e instanceof PreIncExpr or e instanceof PreDecExpr)
+int numImplicitTypeCasts(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and
+    (e instanceof ImplicitCastExpr or
+     e instanceof ImplicitCoercionToUnitExpr or
+     e instanceof ImplicitNotNullExpr or
+     e instanceof UnsafeCoerceExpr)
   )
 }
 
-int numSpecialPatterns(Method m) {
-  result = count(RecordPatternExpr e | e.getEnclosingCallable() = m)
+int numValDiscardExpr(Method m) {
+  result = count(ValueDiscardingExpr e | e.getEnclosingCallable() = m)
 }
 
-class TargetFile extends File {
-  TargetFile() {
-    this.isJavaSourceFile() and
-    this.getRelativePath() = "{{ relative_path }}"
-  }
+int numAssignExpr(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and
+    (e instanceof AssignAndExpr or
+     e instanceof AssignLeftShiftExpr or
+     e instanceof AssignOrExpr or
+     e instanceof AssignRemExpr or
+     e instanceof AssignRightShiftExpr or
+     e instanceof AssignUnsignedRightShiftExpr or
+     e instanceof AssignXorExpr or
+     e instanceof AssignDivExpr or
+     e instanceof AssignMulExpr)
+  )
+}
+
+int numBitwiseExpr(Method m) {
+  result = count(Expr e | e.getEnclosingCallable() = m and
+    (e instanceof AndBitwiseExpr or
+     e instanceof BitNotExpr or
+     e instanceof BitwiseExpr or
+     e instanceof LeftShiftExpr or
+     e instanceof OrBitwiseExpr or
+     e instanceof RightShiftExpr or
+     e instanceof UnsignedRightShiftExpr or
+     e instanceof XorBitwiseExpr)
+  )
 }
 
 from Method m, TargetFile targetFile
-where
-  m.fromSource() and
-  m.getDeclaringType().hasName("{{ class_name }}") and
-  m.hasName("{{ method_name }}") and
-  m.getFile() = targetFile
-select
-  count(Field f | m.accesses(f) and f.fromSource()) as field_accesses,
-  count(Field f | m.writes(f) and f.fromSource()) as field_writes,
-  getClassOtherInvocations(m) as same_class_other_invoc,
-  getNonClassKnownInvocations(m) as diff_class_known_invoc,
-  getNonClassUnknownInvocations(m) as diff_class_unknown_invoc,
-  count(ConditionalStmt cst | cst.getEnclosingCallable() = m) as branch_count,
-  numLambdaAndFunctionalExpr(m) as lambda_functional_count,
-  numSpecialMethodAccess(m) as special_method_access_count,
-  numSpecialControlFlow(m) as special_control_flow_count,
-  numSpecialLiterals(m) as special_literals_count,
-  numSpecialIncDec(m) as special_incdec_count,
-  numSpecialPatterns(m) as special_patterns_count,
-  m.getMetrics().getHalsteadLength() as halstead_length,
-  m.getMetrics().getHalsteadVocabulary() as halstead_vocab,
-  m.getMetrics().getCyclomaticComplexity() as cyclomatic_complexity,
-  m.getMetrics().getEfferentCoupling() as efferent_coupling,
-  m.getMetrics().getAfferentCoupling() as afferent_coupling,
-  m.getDeclaringType().getMetrics().getMaintainabilityIndex() as maintainability_index,
-  m.getDeclaringType().getMetrics().getMaintainabilityIndexWithoutComments() as maintainability_index_no_comments,
-  m.getMetrics().getNumberOfParameters() as num_params,
-  m.getMetrics().getNumberOfLinesOfCode() as num_lines_code,
-  m.getStringSignature() as gsig
+where m.fromSource() and
+      m.getDeclaringType().hasName("{{ class_name }}") and
+      m.hasName("{{ method_name }}") and
+      m.getFile() = targetFile
+select count(Field f | m.accesses(f) and f.fromSource()) as field_accesses,
+       count(Field f | m.writes(f) and f.fromSource()) as field_writes,
+       getClassOtherInvocations(m) as same_class_other_invoc,
+       getNonClassKnownInvocations(m) as diff_class_known_invoc,
+       getNonClassUnknownInvocations(m) as diff_class_unknown_invoc,
+       numLambdaAndHigherOrderExpr(m) as lambda_higher_order_count,
+       numFieldAndPropertyExpr(m) as field_property_count,
+       numControlFlowExpr(m) as control_flow_count,
+       numLiteralExpr(m) as literal_count,
+       numExplicitTypeCasts(m) as explicit_cast_count,
+       numImplicitTypeCasts(m) as implicit_cast_count,
+       numValDiscardExpr(m) as val_disc_expr_count,
+       numAssignExpr(m) as assign_expr_count,
+       numBitwiseExpr(m) as bitwise_expr_count,
+       m.getMetrics().getHalsteadLength() as halstead_length,
+       m.getMetrics().getHalsteadVocabulary() as halstead_vocab,
+       m.getMetrics().getCyclomaticComplexity() as cyclomatic_complexity,
+       m.getMetrics().getEfferentCoupling() as efferent_coupling,
+       m.getMetrics().getAfferentCoupling() as afferent_coupling,
+       m.getDeclaringType().getMetrics().getMaintainabilityIndex() as maintainability_index,
+       m.getDeclaringType().getMetrics().getMaintainabilityIndexWithoutComments() as maintainability_index_no_comments,
+       m.getMetrics().getNumberOfParameters() as num_params,
+       m.getMetrics().getNumberOfLinesOfCode() as num_lines_code,
+       m.getStringSignature() as gsig
