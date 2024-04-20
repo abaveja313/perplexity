@@ -73,7 +73,7 @@ int numSpecialLiterals(Method m) {
 int numSpecialIncDec(Method m) {
   result = count(Expr e |
     e.getEnclosingCallable() = m and
-    (e instanceof PreIncExpr or e instanceof PostIncExpr)
+    (e instanceof PreIncExpr or e instanceof PreDecExpr)
   )
 }
 
