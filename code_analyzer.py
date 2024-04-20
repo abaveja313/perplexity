@@ -265,31 +265,6 @@ def process_repo(logger, repo_url, targets, last_updated, args):
                     )
                 continue
 
-            test_cases = targets[targets["focal_method.cm_signature"] == method_cm_sig]
-            for i, test_case in test_cases.iterrows():
-                test_cm_sig = test_case["test_case.cm_signature"]
-                logger.warning(f"Processing testcase {test_cm_sig}")
-                testcase_stats, cached = process_testcase(
-                    logger, repo_url, codeql_db, query_env, test_case, args
-                )
-
-                if not cached:
-                    DBUtils.update_stats(
-                        stats_env,
-                        success=testcase_stats is not None,
-                        level="testcase",
-                        name=test_cm_sig,
-                        **update_kws,
-                    )
-                else:
-                    DBUtils.update_stats(
-                        stats_env,
-                        success=True,
-                        level="cached_testcase",
-                        name=test_cm_sig,
-                        **update_kws,
-                    )
-
             DBUtils.update_stats(
                 stats_env,
                 success=True,
