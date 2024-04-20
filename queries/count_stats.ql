@@ -113,4 +113,7 @@ select
   m.getMetrics().getEfferentCoupling() as efferent_coupling,
   m.getMetrics().getAfferentCoupling() as afferent_coupling,
   m.getDeclaringType().getMetrics().getMaintainabilityIndex() as maintainability_index,
+  m.getDeclaringType().getMetrics().getMaintainabilityIndexWithoutComments() as maintainability_index_no_comments,
+  m.getMetrics().getNumberOfParameters() as num_params,
+  m.getMetrics().getNumberOfLinesOfCode() as num_lines_code,
   m.getStringSignature() as gsig

@@ -369,7 +369,7 @@ class DBUtils:
         if name is not None:
             DBUtils.add_to_list(db, f"{prefix}_{level}_items", name)
 
-        DBUtils.sync_stats(db, "/matx/u/abaveja/stats.json")
+        DBUtils.sync_stats(db, "/matx/u/abaveja/stats2.json")
 
     @staticmethod
     def add_item(env, key, results):
