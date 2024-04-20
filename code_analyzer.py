@@ -327,42 +327,47 @@ def monitor_inactivity(
     while True:
         time.sleep(30)  # Check every 30 secs
         print_alert("Checking processes for inactivity...")
-        target = {url: convert_unix_to_pst(last_updated[url]) for url in last_updated}
-        DBUtils.sync_data(target, "/matx/u/abaveja/last_updated.json")
+        try:
+            target = {url: convert_unix_to_pst(last_updated[url]) for url in last_updated}
+            DBUtils.sync_data(target, "/matx/u/abaveja/last_updated.json")
 
-        for future in futures:
-            repo_url = future_repo_mapping[future]
-            if not future.running() or not repo_url in target:
-                continue
+            for future in futures:
+                repo_url = future_repo_mapping[future]
+                if not future.running() or not repo_url in target:
+                    continue
 
-            repo_url = future_repo_mapping[future]
-            diff = time.time() - last_updated[repo_url]
-            if diff > timedelta(minutes=6).total_seconds():
-                ddf = partitioned_df[partitioned_df["repository.url"] == repo_url]
-                retry_count[repo_url] += 1
-                print_alert("Killing Worker")
-                os.kill(process_pid[repo_url], signal.SIGUSR1)
-                last_updated.pop(repo_url)
-                process_pid.pop(repo_url)
-                time.sleep(3)
-                
-                if retry_count[repo_url] < max_retries:
-                    new_future = executor.submit(
-                        process_repo_task,
-                        repo_url,
-                        ddf,
-                        last_updated,
-                        process_pid,
-                        retry_count,
-                        args,
-                    )
-                    futures.append(new_future)
-                    future_repo_mapping[new_future] = repo_url
-                else:
-                    print_alert(
-                        f"Max retries reached for repository: {repo_url}. Skipping."
-                    )
-                    futures.remove(future)
+                repo_url = future_repo_mapping[future]
+                diff = time.time() - last_updated[repo_url]
+                if diff > timedelta(minutes=6).total_seconds():
+                    ddf = partitioned_df[partitioned_df["repository.url"] == repo_url]
+                    retry_count[repo_url] += 1
+                    print_alert("Killing Worker")
+                    os.kill(process_pid[repo_url], signal.SIGUSR1)
+                    last_updated.pop(repo_url)
+                    process_pid.pop(repo_url)
+                    time.sleep(3)
+                    
+                    if retry_count[repo_url] < max_retries:
+                        new_future = executor.submit(
+                            process_repo_task,
+                            repo_url,
+                            ddf,
+                            last_updated,
+                            process_pid,
+                            retry_count,
+                            args,
+                        )
+                        futures.append(new_future)
+                        future_repo_mapping[new_future] = repo_url
+                    else:
+                        print_alert(
+                            f"Max retries reached for repository: {repo_url}. Skipping."
+                        )
+                        futures.remove(future)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            continue
 
 def main():
     parser = argparse.ArgumentParser(description="Script to process repositories.")
